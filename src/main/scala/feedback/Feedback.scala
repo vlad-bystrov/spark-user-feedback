@@ -73,20 +73,28 @@ object Feedback {
   }
 
   def feedbackGroupedRDD(rdd: RDD[FeedbackRow]): RDD[FeedbackGroupedRow] = {
-    def roundAvg(sum: Double, count: Int): Double = (sum / count * 10).round / 10d
+    def roundAvg(value: Double): Double = (value * 10).round / 10d
 
-    rdd
-      .groupBy(_.manager_name)
-      .mapValues { it =>
-        val count = it.size
-        val (sumRespTime, sumSatisfaction) =
-          it.foldLeft((0.0, 0.0))((acc, r) => (acc._1 + r.response_time, acc._2 + r.statisfaction_level))
+    def avg(it: Iterable[FeedbackRow]): (Double, Double) = {
+      def seqop(acc: (Double, Double), row: FeedbackRow): (Double, Double) =
+        (acc._1 + row.response_time, acc._2 + row.statisfaction_level)
 
-        (roundAvg(sumRespTime, count), roundAvg(sumSatisfaction, count))
-      }
-    .map {
-      case (mname, (rtime, slevel)) => FeedbackGroupedRow(mname, rtime, slevel)
+      def comboop(acc1: (Double, Double), acc2: (Double, Double)): (Double, Double) =
+        (acc1._1 + acc2._1, acc1._2 + acc2._2)
+
+      val count = it.size
+      val (time, satisfaction) = it.aggregate((0.0, 0.0))(seqop, comboop)
+
+      (time / count, satisfaction / count)
     }
+
+    val grouped: RDD[(String, Iterable[FeedbackRow])] = rdd.map(el => (el.manager_name, el)).groupByKey()
+
+    grouped
+      .mapValues(avg)
+      .map {
+        case (mname, (rtime, slevel)) => FeedbackGroupedRow(mname, roundAvg(rtime), roundAvg(slevel))
+      }
   }
 
   def fsPath(resource: String): String =
