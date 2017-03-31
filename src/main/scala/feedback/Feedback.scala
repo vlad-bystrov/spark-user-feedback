@@ -2,6 +2,7 @@ package feedback
 
 import java.nio.file.Paths
 
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.execution.aggregate.TypedAverage
 import org.apache.spark.sql.{DataFrame, Dataset, Row, TypedColumn}
 import org.apache.spark.sql.types._
@@ -28,7 +29,13 @@ object Feedback {
 
   /** Main function */
   def main(args: Array[String]): Unit = {
-    val initDf = read("feedback.csv")
+    val rawRDD = read("feedback.csv")
+    val initRDD = toRDD(rawRDD)
+
+    val finalRDD = feedbackGroupedRDD(initRDD)
+
+    val initDf = toDF(rawRDD)
+
     val finalDf = feedbackGrouped(initDf)
     val finalSqlDf = feedbackGroupedSql(initDf)
 
@@ -40,20 +47,46 @@ object Feedback {
     spark.close()
   }
 
-  def read(resource: String): DataFrame = {
-    val rdd = spark.sparkContext.textFile(fsPath(resource))
+  def read(resource: String): RDD[String] =
+    spark.sparkContext.textFile(fsPath(resource))
 
-    val headerColumns = rdd.first().split(",").to[List]
+  def toRDD(raw: RDD[String]): RDD[FeedbackRow] =
+    raw
+      .mapPartitionsWithIndex((i, it) => if (i == 0) it.drop(1) else it)
+      .map { el =>
+        val arr = el.split(",")
+        FeedbackRow(arr(0), arr(1), arr(2), arr(3).toInt, arr(4).toDouble, arr(5).toDouble)
+      }
+
+  def toDF(raw: RDD[String]): DataFrame = {
+    val headerColumns = raw.first().split(",").to[List]
     // Compute the schema based on the first line of the CSV file
     val schema = dfSchema(headerColumns)
 
     val data =
-      rdd
+      raw
         .mapPartitionsWithIndex((i, it) => if (i == 0) it.drop(1) else it) // skip the header line
         .map(_.split(",").to[List])
         .map(row)
 
     spark.createDataFrame(data, schema)
+  }
+
+  def feedbackGroupedRDD(rdd: RDD[FeedbackRow]): RDD[FeedbackGroupedRow] = {
+    def roundAvg(sum: Double, count: Int): Double = (sum / count * 10).round / 10d
+
+    rdd
+      .groupBy(_.manager_name)
+      .mapValues { it =>
+        val count = it.size
+        val (sumRespTime, sumSatisfaction) =
+          it.foldLeft((0.0, 0.0))((acc, r) => (acc._1 + r.response_time, acc._2 + r.statisfaction_level))
+
+        (roundAvg(sumRespTime, count), roundAvg(sumSatisfaction, count))
+      }
+    .map {
+      case (mname, (rtime, slevel)) => FeedbackGroupedRow(mname, rtime, slevel)
+    }
   }
 
   def fsPath(resource: String): String =
@@ -126,7 +159,7 @@ object Feedback {
     feedbackSummaryDf.as[FeedbackRow]
   }
 
-  def feedbackGroupedTyped(summed: Dataset[FeedbackRow]): Dataset[FeedbackRow] = {
+  def feedbackGroupedTyped(summed: Dataset[FeedbackRow]): Dataset[FeedbackGroupedRow] = {
     import spark.implicits._
 
     def scaledAvg[IN](f: IN => Double): TypedColumn[IN, Double] = new TypedScaledAverage(f).toColumn
@@ -135,13 +168,15 @@ object Feedback {
       .groupByKey(x => x.manager_name)
       .agg(scaledAvg(_.response_time), scaledAvg(_.statisfaction_level))
       .map { case (managerName, time, statisfaction) =>
-        FeedbackRow(managerName, time, statisfaction)
+        FeedbackGroupedRow(managerName, time, statisfaction)
       }.orderBy($"statisfaction_level")
   }
 
 }
 
-case class FeedbackRow(manager_name: String, response_time: Double, statisfaction_level: Double)
+case class FeedbackRow(manager_name: String, client_name: String, client_sex: String, client_age: Int, response_time: Double, statisfaction_level: Double)
+
+case class FeedbackGroupedRow(manager_name: String, response_time: Double, statisfaction_level: Double)
 
 class TypedScaledAverage[IN](f: IN => Double) extends TypedAverage[IN](f) {
   override def finish(red: (Double, Long)): Double = (red._1 / red._2 * 10).round / 10d
