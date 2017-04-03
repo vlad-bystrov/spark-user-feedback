@@ -1,4 +1,4 @@
-manager_name,client_name,client_sex,client_age,response_time,statisfaction_level
+manager_name,client_name,client_gender,client_age,response_time,statisfaction_level
 "Arjun Kumar","Rehan Nigam","male",30,4.0,0.5
 "Arjun Kumar","Sam Mehta","male",27,3.0,0.7
 "Arjun Kumar","Ira Pawan","female",40,2.5,0.6

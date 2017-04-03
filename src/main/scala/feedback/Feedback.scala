@@ -42,7 +42,7 @@ object Feedback {
     val initDs = feedbackSummaryTyped(initDf)
     val finalDs = feedbackGroupedTyped(initDs)
 
-    finalDs.show()
+    initDf.show()
 
     spark.close()
   }
@@ -77,7 +77,7 @@ object Feedback {
 
     def avg(it: Iterable[FeedbackRow]): (Double, Double) = {
       def seqop(acc: (Double, Double), row: FeedbackRow): (Double, Double) =
-        (acc._1 + row.response_time, acc._2 + row.statisfaction_level)
+        (acc._1 + row.response_time, acc._2 + row.satisfaction_level)
 
       def comboop(acc1: (Double, Double), acc2: (Double, Double)): (Double, Double) =
         (acc1._1 + acc2._1, acc1._2 + acc2._2)
@@ -102,7 +102,7 @@ object Feedback {
 
   def dfSchema1(columnNames: List[String]): StructType = {
     def dfField(columnName: String): StructField = columnName match {
-      case strCol @ ("manager_name" | "client_name" | "client_sex") =>
+      case strCol @ ("manager_name" | "client_name" | "client_gender") =>
         StructField(name = strCol, dataType = StringType, nullable = false)
       case intCol @ "client_age" =>
         StructField(name = intCol, dataType = IntegerType, nullable = false)
@@ -118,17 +118,17 @@ object Feedback {
       Seq(
         StructField(name = "manager_name", dataType = StringType, nullable = false),
         StructField(name = "client_name", dataType = StringType, nullable = false),
-        StructField(name = "client_sex", dataType = StringType, nullable = false),
+        StructField(name = "client_gender", dataType = StringType, nullable = false),
         StructField(name = "client_age", dataType = IntegerType, nullable = false),
         StructField(name = "response_time", dataType = DoubleType, nullable = false),
-        StructField(name = "statisfaction_level", dataType = DoubleType, nullable = false)
+        StructField(name = "satisfaction_level", dataType = DoubleType, nullable = false)
       )
     )
   }
 
   def row1(line: List[String]): Row = line match {
-    case List(mName, cName, cSex, cAge, rTime, sLevel) =>
-      Row(mName, cName, cSex, cAge.toInt, rTime.toDouble, sLevel.toDouble)
+    case List(mName, cName, cgender, cAge, rTime, sLevel) =>
+      Row(mName, cName, cgender, cAge.toInt, rTime.toDouble, sLevel.toDouble)
     case _ => Row()
   }
 
@@ -141,9 +141,9 @@ object Feedback {
       .groupBy($"manager_name")
       .agg(
         round(avg($"response_time"), 1).as("time"),
-        round(avg($"statisfaction_level"), 1).as("statisfaction")
+        round(avg($"satisfaction_level"), 1).as("satisfaction")
       )
-      .orderBy($"statisfaction")
+      .orderBy($"satisfaction")
   }
 
   def feedbackGroupedSql(summed: DataFrame): DataFrame = {
@@ -153,10 +153,10 @@ object Feedback {
       s"""
         SELECT manager_name,
         ROUND(SUM(response_time) / COUNT(response_time), 1) AS time,
-        ROUND(SUM(statisfaction_level) / COUNT(statisfaction_level), 1) AS statisfaction
+        ROUND(SUM(satisfaction_level) / COUNT(satisfaction_level), 1) AS satisfaction
         FROM $viewName
         GROUP BY manager_name
-        ORDER BY statisfaction
+        ORDER BY satisfaction
       """
 
     summed.createOrReplaceTempView(viewName)
@@ -174,17 +174,17 @@ object Feedback {
 
     summed
       .groupByKey(x => x.manager_name)
-      .agg(scaledAvg(_.response_time), scaledAvg(_.statisfaction_level))
-      .map { case (managerName, time, statisfaction) =>
-        FeedbackGroupedRow(managerName, time, statisfaction)
-      }.orderBy($"statisfaction_level")
+      .agg(scaledAvg(_.response_time), scaledAvg(_.satisfaction_level))
+      .map { case (managerName, time, satisfaction) =>
+        FeedbackGroupedRow(managerName, time, satisfaction)
+      }.orderBy($"satisfaction_level")
   }
 
 }
 
-case class FeedbackRow(manager_name: String, client_name: String, client_sex: String, client_age: Int, response_time: Double, statisfaction_level: Double)
+case class FeedbackRow(manager_name: String, client_name: String, client_gender: String, client_age: Int, response_time: Double, satisfaction_level: Double)
 
-case class FeedbackGroupedRow(manager_name: String, response_time: Double, statisfaction_level: Double)
+case class FeedbackGroupedRow(manager_name: String, response_time: Double, satisfaction_level: Double)
 
 class TypedScaledAverage[IN](f: IN => Double) extends TypedAverage[IN](f) {
   override def finish(red: (Double, Long)): Double = (red._1 / red._2 * 10).round / 10d
